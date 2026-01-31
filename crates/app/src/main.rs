@@ -35,7 +35,11 @@ async fn main() -> Result<()> {
             maybe = rx.recv() => {
                 if let Some(ev) = maybe {
                     if ev.channel_id == cfg.channel_id {
-                        render_incoming(&ev.author, &ev.content).await?;
+                        if extract_pgp_message_block(&ev.content).is_some() {
+                            render_pgp_unknown(&ev.author).await?;
+                        } else {
+                            render_incoming(&ev.author, &ev.content).await?;
+                        }
                         print_prompt(RememberedPrompt::Normal).await?;
                     }
                 }
@@ -144,4 +148,27 @@ async fn print_prompt(_mode: RememberedPrompt) -> Result<()> {
     out.write_all("pgp-disc> ".as_bytes()).await?;
     out.flush().await?;
     Ok(())
+}
+
+async fn render_pgp_unknown(author: &str) -> Result<()> {
+    let ts = Local::now().format("%H:%M:%S");
+    let mut out = io::stdout();
+    out.write_all(format!("\n[{ts}] \u{2190} {author}: [PGP] unknown message\n").as_bytes()).await?;
+    out.flush().await?;
+    Ok(())
+}
+
+fn extract_pgp_message_block(input: &str) -> Option<String> {
+    const BEGIN: &str = "-----BEGIN PGP MESSAGE-----";
+    const END: &str = "-----END PGP MESSAGE-----";
+
+    let start = input.find(BEGIN)?;
+    let after_start = &input[start..];
+    let end_rel = after_start.find(END)?;
+    let end_abs = start + end_rel + END.len();
+
+    // extract pgp block
+    let block = &input[start..end_abs];
+
+    Some(block.trim().to_string())
 }
