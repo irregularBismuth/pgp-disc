@@ -137,6 +137,8 @@ async fn handle_command(
             println!("Commands:");
             println!("  me                  Show your local GPG secret key fingerprints");
             println!("  send <message...>   Send message to channel");
+            println!("  keys                List public keys (recipients) from your GPG keyring");
+            println!("  pgp send <fpr|uid> <message...>   Encrypt and send to Discord");
             println!("  pgp list            List captured PGP blocks");
             println!("  pgp decrypt <id>    Try to decrypt a captured PGP block");
             println!("  pgp decrypt-last    Try to decrypt the latest captured PGP block");
@@ -156,6 +158,23 @@ async fn handle_command(
             Ok(CmdOutcome::Continue {
                 print_prompt: false,
             })
+        }
+
+        "keys" => {
+            let keys = crypto::gpg::list_public_keys()?;
+            if keys.is_empty() {
+                println!("No public keys foind in your GPG keyring.")
+            } else {
+                println!("Public keys (recipients):");
+                for k in keys {
+                    match k.uid {
+                        Some(uid) => println!("  {}  —  {}", k.fpr, uid),
+                        None => println!("  {}", k.fpr),
+                    }
+                }
+            }
+
+            Ok(CmdOutcome::Continue { print_prompt: true })
         }
 
         "pgp" => {
@@ -213,6 +232,25 @@ async fn handle_command(
                     }
 
                     Ok(CmdOutcome::Continue { print_prompt: true })
+                }
+
+                "send" => {
+                    let recipient = parts
+                        .next()
+                        .ok_or_else(|| anyhow!("Usage: pgp send <recipient> <message...>"))?;
+                    let msg = parts.collect::<Vec<_>>().join(" ");
+                    if msg.is_empty() {
+                        return Err(anyhow!("Usage: pgp send <recipient> <message...>"));
+                    }
+
+                    let armored = crypto::gpg::encrypt_to_recipient(recipient, &msg)?;
+
+                    // send armored block
+                    transport::send_message(&cfg.token, cfg.channel_id, &armored).await?;
+                    println!("→ sent encrypted PGP message");
+                    Ok(CmdOutcome::Continue {
+                        print_prompt: false,
+                    })
                 }
 
                 _ => Err(anyhow!("Usage: pgp <list|decrypt <id>|decrypt-last>")),
