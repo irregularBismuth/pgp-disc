@@ -46,7 +46,19 @@ async fn main() -> Result<()> {
                                 pgp_inbox.pop_front();
                             }
 
-                            render_pgp_unknown(&ev.author, &id).await?;
+                            let block_ref = &pgp_inbox.back().unwrap().1;
+
+                            // decrypt on recieve
+                            match crypto::gpg::decrypt(block_ref) {
+                                Ok(pt) => render_pgp_decrypted(&ev.author, &id, &pt).await?,
+                                Err(crypto::gpg::DecryptError::NotForMe { .. }) => render_pgp_unknown(&ev.author, &id).await?,
+                                Err(crypto::gpg::DecryptError::InvalidMessage { .. }) => render_pgp_invalid(&ev.author, &id).await?,
+                                Err(e) => {
+                                    render_pgp_error(&ev.author, &id).await?;
+                                    tracing::debug!("{e:?}");
+                                }
+                            }
+                            //render_pgp_unknown(&ev.author, &id).await?;
                         } else {
                             render_incoming(&ev.author, &ev.content).await?;
                         }
@@ -301,6 +313,37 @@ async fn render_error(msg: &str) -> Result<()> {
 async fn print_prompt(_mode: RememberedPrompt) -> Result<()> {
     let mut out = io::stdout();
     out.write_all("pgp-disc> ".as_bytes()).await?;
+    out.flush().await?;
+    Ok(())
+}
+
+async fn render_pgp_decrypted(author: &str, id: &str, plaintext: &str) -> Result<()> {
+    let ts = Local::now().format("%H:%M:%S");
+    let mut out = io::stdout();
+    out.write_all(
+        format!("\n[{ts}] \u{2190} {author}: [PGP] id={id} decrypted:\n{plaintext}\n").as_bytes(),
+    )
+    .await?;
+    out.flush().await?;
+    Ok(())
+}
+
+async fn render_pgp_invalid(author: &str, id: &str) -> Result<()> {
+    let ts = Local::now().format("%H:%M:%S");
+    let mut out = io::stdout();
+    out.write_all(format!("\n[{ts}] \u{2190} {author}: [PGP] id={id} (invalid)\n").as_bytes())
+        .await?;
+    out.flush().await?;
+    Ok(())
+}
+
+async fn render_pgp_error(author: &str, id: &str) -> Result<()> {
+    let ts = Local::now().format("%H:%M:%S");
+    let mut out = io::stdout();
+    out.write_all(
+        format!("\n[{ts}] \u{2190} {author}: [PGP] id={id} (decrypt error)\n").as_bytes(),
+    )
+    .await?;
     out.flush().await?;
     Ok(())
 }
