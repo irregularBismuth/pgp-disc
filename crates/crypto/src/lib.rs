@@ -1,3 +1,4 @@
+pub mod gpg;
 
 /// Extract block if pgp
 pub fn extract_pgp_message_block(input: &str) -> Option<String> {

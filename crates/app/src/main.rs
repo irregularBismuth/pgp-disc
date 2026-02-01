@@ -1,8 +1,8 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::Local;
+use std::collections::VecDeque;
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing_subscriber::EnvFilter;
-use std::collections::VecDeque;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
                     continue;
                 }
 
-                match handle_command(line, &cfg).await {
+                match handle_command(line, &cfg, &mut pgp_inbox).await {
                     Ok(CmdOutcome::Continue { print_prompt: p }) => {
                         if p {
                             print_prompt(RememberedPrompt::Normal).await?;
@@ -99,15 +99,43 @@ enum CmdOutcome {
 }
 
 #[derive(Copy, Clone)]
-enum RememberedPrompt { Normal }
+enum RememberedPrompt {
+    Normal,
+}
 
-async fn handle_command(line: &str, cfg: &common::Config) -> Result<CmdOutcome> {
+async fn handle_command(
+    line: &str,
+    cfg: &common::Config,
+    _pgp_inbox: &mut VecDeque<(String, String)>,
+) -> Result<CmdOutcome> {
     let mut parts = line.split_whitespace();
     let cmd = parts.next().ok_or_else(|| anyhow!("empty command"))?;
 
     match cmd {
+        "me" => {
+            if !crypto::gpg::available()? {
+                println!("gpg not found.");
+                return Ok(CmdOutcome::Continue { print_prompt: true });
+            }
+
+            println!("{}", crypto::gpg::version_line()?);
+
+            let fprs = crypto::gpg::list_secret_fingerprints()?;
+            if fprs.is_empty() {
+                println!("No secret keys found in your GPG keyring.")
+            } else {
+                println!("Secret key fingerprints:");
+                for f in fprs {
+                    println!("  {f}");
+                }
+            }
+
+            Ok(CmdOutcome::Continue { print_prompt: true })
+        }
+
         "help" | "h" | "?" => {
             println!("Commands:");
+            println!("  me                  Show your local GPG secret key fingerprints");
             println!("  send <message...>   Send message to channel");
             println!("  help                Show this help");
             println!("  quit                Exit");
@@ -122,7 +150,9 @@ async fn handle_command(line: &str, cfg: &common::Config) -> Result<CmdOutcome> 
 
             transport::send_message(&cfg.token, cfg.channel_id, &msg).await?;
             render_outgoing_sent().await?;
-            Ok(CmdOutcome::Continue { print_prompt: false })
+            Ok(CmdOutcome::Continue {
+                print_prompt: false,
+            })
         }
 
         "quit" | "exit" | "q" => Ok(CmdOutcome::Quit),
@@ -134,7 +164,8 @@ async fn handle_command(line: &str, cfg: &common::Config) -> Result<CmdOutcome> 
 async fn render_incoming(author: &str, content: &str) -> Result<()> {
     let ts = Local::now().format("%H:%M:%S");
     let mut out = io::stdout();
-    out.write_all(format!("\n[{ts}] \u{2190} {author}: {content}\n").as_bytes()).await?;
+    out.write_all(format!("\n[{ts}] \u{2190} {author}: {content}\n").as_bytes())
+        .await?;
     out.flush().await?;
     Ok(())
 }
@@ -148,7 +179,8 @@ async fn render_outgoing_sent() -> Result<()> {
 
 async fn render_error(msg: &str) -> Result<()> {
     let mut out = io::stdout();
-    out.write_all(format!("! error: {msg}\n").as_bytes()).await?;
+    out.write_all(format!("! error: {msg}\n").as_bytes())
+        .await?;
     out.flush().await?;
     Ok(())
 }
@@ -163,7 +195,10 @@ async fn print_prompt(_mode: RememberedPrompt) -> Result<()> {
 async fn render_pgp_unknown(author: &str, id: &str) -> Result<()> {
     let ts = Local::now().format("%H:%M:%S");
     let mut out = io::stdout();
-    out.write_all(format!("\n[{ts}] \u{2190} {author}: [PGP] message id={id} (unknown)\n").as_bytes()).await?;
+    out.write_all(
+        format!("\n[{ts}] \u{2190} {author}: [PGP] message id={id} (unknown)\n").as_bytes(),
+    )
+    .await?;
     out.flush().await?;
     Ok(())
 }

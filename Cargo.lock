@@ -35,8 +35,6 @@ dependencies = [
  "common",
  "crypto",
  "dotenvy",
- "hex",
- "sha2",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -151,6 +149,7 @@ dependencies = [
 name = "crypto"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "hex",
  "sha2",
 ]
