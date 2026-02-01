@@ -39,29 +39,7 @@ async fn main() -> Result<()> {
             maybe = rx.recv() => {
                 if let Some(ev) = maybe {
                     if ev.channel_id == cfg.channel_id {
-                        if let Some((id, block)) = crypto::detect_pgp(&ev.content) {
-                            pgp_inbox.push_back((id.clone(), block));
-                            // keep last 50
-                            while pgp_inbox.len() > 50 {
-                                pgp_inbox.pop_front();
-                            }
-
-                            let block_ref = &pgp_inbox.back().unwrap().1;
-
-                            // decrypt on recieve
-                            match crypto::gpg::decrypt(block_ref) {
-                                Ok(pt) => render_pgp_decrypted(&ev.author, &id, &pt).await?,
-                                Err(crypto::gpg::DecryptError::NotForMe { .. }) => render_pgp_unknown(&ev.author, &id).await?,
-                                Err(crypto::gpg::DecryptError::InvalidMessage { .. }) => render_pgp_invalid(&ev.author, &id).await?,
-                                Err(e) => {
-                                    render_pgp_error(&ev.author, &id).await?;
-                                    tracing::debug!("{e:?}");
-                                }
-                            }
-                            //render_pgp_unknown(&ev.author, &id).await?;
-                        } else {
-                            render_incoming(&ev.author, &ev.content).await?;
-                        }
+                        handle_chat_event(&ev, &mut pgp_inbox).await?;
                         print_prompt(RememberedPrompt::Normal).await?;
                     }
                 }
@@ -150,6 +128,9 @@ async fn handle_command(
             println!("  me                  Show your local GPG secret key fingerprints");
             println!("  send <message...>   Send message to channel");
             println!("  keys                List public keys (recipients) from your GPG keyring");
+            println!(
+                "  load <count>        Load and replay last <count> messages from the channel"
+            );
             println!("  pgp send <fpr|uid> <message...>   Encrypt and send to Discord");
             println!("  pgp list            List captured PGP blocks");
             println!("  pgp decrypt <id>    Try to decrypt a captured PGP block");
@@ -184,6 +165,27 @@ async fn handle_command(
                         None => println!("  {}", k.fpr),
                     }
                 }
+            }
+
+            Ok(CmdOutcome::Continue { print_prompt: true })
+        }
+
+        "load" => {
+            let n_str = parts.next().ok_or_else(|| anyhow!("Usage: load <count>"))?;
+            let n: usize = n_str
+                .parse()
+                .map_err(|_| anyhow!("load <count> must be a number"))?;
+
+            let history = transport::fetch_messages(&cfg.token, cfg.channel_id, n).await?;
+            if history.is_empty() {
+                println!("No messages returned.");
+                return Ok(CmdOutcome::Continue { print_prompt: true });
+            }
+
+            println!("Loading {}/{} messages...", history.len(), n);
+
+            for ev in history {
+                handle_chat_event(&ev, pgp_inbox).await?;
             }
 
             Ok(CmdOutcome::Continue { print_prompt: true })
@@ -284,6 +286,35 @@ async fn handle_command(
 
         _ => Err(anyhow!("Unknown command: {cmd} (try: help)")),
     }
+}
+
+async fn handle_chat_event(
+    ev: &transport::ChatEvent,
+    pgp_inbox: &mut VecDeque<(String, String)>,
+) -> Result<()> {
+    if let Some((id, block)) = crypto::detect_pgp(&ev.content) {
+        pgp_inbox.push_back((id.clone(), block.clone()));
+        while pgp_inbox.len() > 50 {
+            pgp_inbox.pop_front();
+        }
+
+        match crypto::gpg::decrypt(&block) {
+            Ok(pt) => render_pgp_decrypted(&ev.author, &id, &pt).await?,
+            Err(crypto::gpg::DecryptError::NotForMe { .. }) => {
+                render_pgp_unknown(&ev.author, &id).await?
+            }
+            Err(crypto::gpg::DecryptError::InvalidMessage { .. }) => {
+                render_pgp_invalid(&ev.author, &id).await?
+            }
+            Err(e) => {
+                render_pgp_error(&ev.author, &id).await?;
+                tracing::debug!("{e:?}");
+            }
+        }
+    } else {
+        render_incoming(&ev.author, &ev.content).await?;
+    }
+    Ok(())
 }
 
 async fn render_incoming(author: &str, content: &str) -> Result<()> {
