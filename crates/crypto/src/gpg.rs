@@ -2,27 +2,19 @@ use anyhow::{Result, anyhow};
 use std::fmt;
 use std::io::Write;
 use std::process::{Command, Stdio};
+use thiserror::Error;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Error)]
 pub enum DecryptError {
+    #[error("not for me")]
     NotForMe { stderr: String },
+    #[error("invalid pgp message")]
     InvalidMessage { stderr: String },
+    #[error("Gpg failed")]
     GpgFailed { stderr: String },
+    #[error("Io Error {0}")]
     Io(String),
 }
-
-impl fmt::Display for DecryptError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DecryptError::NotForMe { .. } => write!(f, "not for me"),
-            DecryptError::InvalidMessage { .. } => write!(f, "invalid pgp message"),
-            DecryptError::GpgFailed { .. } => write!(f, "gpg failed"),
-            DecryptError::Io(s) => write!(f, "{s}"),
-        }
-    }
-}
-
-impl std::error::Error for DecryptError {}
 
 fn classify_decrypt_failure(stderr: &str) -> DecryptError {
     let s = stderr.to_lowercase();
